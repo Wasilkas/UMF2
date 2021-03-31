@@ -22,11 +22,6 @@ struct elem
 	double gamma = 0.;
 };
 
-struct localA
-{
-	vector<vector<double>> locA;
-};
-
 struct slae
 {
 	vector<double> di;
@@ -34,7 +29,7 @@ struct slae
 	vector<double> au;
 	vector<int> ia;
 	vector<double> b;
-	vector<double> q;
+	vector<vector<double>> q;
 };
 
 double Lambda(int n_lambda, knot& kn)
@@ -59,12 +54,12 @@ double Sigma(int n_lambda, knot& kn)
 	}
 }
 
-double Func(int n_f, knot& kn)
+double Func(int n_f, knot& kn, double t)
 {
 	switch (n_f)
 	{
 	case(1):
-		return -2;
+		return -2 * t;
 	case(2):
 		return PI * exp(kn.x) * (PI * sin(PI * kn.x) - cos(PI * kn.x));
 	}
@@ -86,16 +81,15 @@ double S2(int n_s)
 	}
 }
 
-void Input_info(vector<double>& timeMesh, double a, double b)
+void Input_info(vector<double>& timeMesh, double &a, double &b)
 {
+	int n = 0;
 	if (fopen_s(&in, "info.txt", "r") == 0)
 	{
-		int n = 0;
-		double a, b;
 		fscanf_s(in, "%d %lf %lf %d", &N_el, &a, &b, &n);
 		timeMesh.resize(n);
 		for (int i = 0; i < n; i++) {
-			fscanf_s(in, "%fl", &timeMesh[i]);
+			fscanf_s(in, "%lf", &timeMesh[i]);
 		}
 	}
 	fclose(in);
@@ -158,13 +152,19 @@ void InputData(vector<double>& timeMesh, vector<knot>& knots, vector<elem>& elem
 	Input_elem(elems, knots);
 }
 
-void CreatePortrait(slae A)
+void CreatePortrait(slae &A, int timeSize)
 {
 	A.di.resize(N_knot);
 	A.ia.resize(N_knot);
 	A.al.resize(N_knot - 1);
 	A.au.resize(N_knot - 1);
-	A.q.resize(N_knot);
+	A.q.resize(timeSize);
+
+	for (int i = 0; i < timeSize; i++)
+	{
+		A.q[i].resize(N_knot);
+	}
+
 	A.b.resize(N_knot);
 
 	for (int i = 0; i < N_knot - 1; i++)
@@ -180,8 +180,8 @@ void CreateLocal_b(vector<vector<double>>& bloc, vector<elem>& elems)
 	{
 		bloc[i].resize(2);
 
-		f1 = Func(1, elems[i].knots[0]);
-		f2 = Func(1, elems[i].knots[1]);
+		//f1 = Func(1, elems[i].knots[0]);
+		//f2 = Func(1, elems[i].knots[1]);
 
 		h = elems[i].knots[1].x - elems[i].knots[0].x;
 		bloc[i][0] = h / 6 * (2 * f1 + f2);
@@ -199,7 +199,7 @@ void Global_b(vector<double>& glob_b, vector<elem>& elems, vector<vector<double>
 		}
 }
 
-void CreateLocalA(vector<localA>& A, vector<elem>& elems)
+void CreateLocalA(slae& A, vector<elem>& elems, double deltaT)
 {
 	vector<vector<double>> G(2), M(2);
 	double h = 0., l1 = 0., l2 = 0., sigma1 = 0., sigma2 = 0.;
@@ -210,12 +210,6 @@ void CreateLocalA(vector<localA>& A, vector<elem>& elems)
 	}
 	for (int i = 0; i < N_el; i++)
 	{
-		A[i].locA.resize(2);
-		for (int j = 0; j < 2; j++)
-		{
-			A[i].locA[j].resize(2);
-		}
-
 		l1 = Lambda(1, elems[i].knots[0]);
 		l2 = Lambda(1, elems[i].knots[1]);
 
@@ -226,21 +220,20 @@ void CreateLocalA(vector<localA>& A, vector<elem>& elems)
 		G[0][0] = G[1][1] = (l1 + l2) / (2 * h);
 		G[0][1] = G[1][0] = -(l1 + l2) / (2 * h);
 
-		M[0][0] = M[1][1] = (sigma1 + sigma2) * h / 3;
-		M[0][1] = M[1][0] = (sigma1 + sigma2) * h / 6;
+		M[0][0] = M[1][1] = (1 / deltaT) * (sigma1 + sigma2) * h / 3;
+		M[0][1] = M[1][0] = (1 / deltaT) * (sigma1 + sigma2) * h / 6;
 
-		for (int j = 0; j < 2; j++)
-			for (int k = 0; k < 2; k++)
-				A[i].locA[j][k] = M[j][k] + G[j][k];
+		A.di[elems[i].vertex_glob[0]] += M[0][0] + G[0][0];
+		A.di[elems[i].vertex_glob[1]] += M[1][1] + G[1][1];
+		A.au[A.ia[elems[i].vertex_glob[]]]
 	}
-	for (int i = 0; i < 2; i++)
+}
+
+void calcQ0(vector<double> &q0, vector<knot> &knots) 
+{
+	for (int i = 0; i < N_knot; i++)
 	{
-		double sum = 0.;
-		for (int j = 0; j < 2; j++)
-		{
-			sum += G[i][j];
-		}
-		cout << sum << endl;
+		q0[i] = Func(1, knots[i], 0);
 	}
 }
 
@@ -362,14 +355,22 @@ int main()
 	InputData(timeMesh, knots, elems);
 
 	slae A;
-	CreatePortrait(A);
-	vector<localA> Aloc(N_el);
-	vector<vector<double>> bloc(N_el);
-	vector<double> glob_b(N_knot);
+	CreatePortrait(A, timeMesh.size());
 
-	CreateLocal_b(bloc, elems);
-	Global_b(glob_b, elems, bloc);
-	CreateLocalA(Aloc, elems);
+	//vector<localA> Aloc(N_el);
+	//vector<vector<double>> bloc(N_el);
+
+	calcQ0(A.q[0], knots);
+	return 0;
+	//for (int i = 1; i < timeMesh.size(); i++)
+	//{
+
+	//}
+
+	//CreateLocal_b(bloc, elems);
+	//CreateLocalA(Aloc, elems);
+
+
 
 	//Gauss(globA, q, glob_b);
 
