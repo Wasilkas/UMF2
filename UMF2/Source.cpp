@@ -7,6 +7,7 @@
 
 using namespace std;
 int N_el = 0, N_knot = 0;
+double EPSILON = 1e-13, DELTA = 1e-13;
 FILE* in;
 
 struct knot
@@ -32,6 +33,26 @@ struct slae
 	vector<vector<double>> q;
 };
 
+struct matrix
+{
+	vector<double> di;
+	vector<double> al;
+	vector<double> au;
+	vector<int> ia;
+
+	matrix() {
+		di.resize(N_knot);
+		ia.resize(N_knot + 1);
+
+		ia[0] = 0;
+		for (int i = 0; i < N_knot; i++)
+			ia[i + 1] = i;
+
+		au.resize(N_knot - 1);
+		al.resize(N_knot - 1);
+	}
+};
+
 double Lambda(int n_lambda, knot& kn)
 {
 	switch (n_lambda)
@@ -43,12 +64,12 @@ double Lambda(int n_lambda, knot& kn)
 	}
 }
 
-double Sigma(int n_lambda, knot& kn)
+double Sigma(int n_lambda, knot& kn, double q, double t)
 {
 	switch (n_lambda)
 	{
 	case(1):
-		return 1.0;
+		return kn.x*t;
 	case(2):
 		return kn.x;
 	}
@@ -59,23 +80,44 @@ double Func(int n_f, knot& kn, double t)
 	switch (n_f)
 	{
 	case(1):
-		return -2 * t;
+		return 5 * kn.x + 3;
 	case(2):
-		return PI * exp(kn.x) * (PI * sin(PI * kn.x) - cos(PI * kn.x));
+		return 2 * t * kn.x;
+	case(3):
+		return kn.x * kn.x * t;
 	}
 }
 
-double S1(int n_s)
+double Q0(int n_f, knot& kn)
 {
-	return 0.0;
+	switch (n_f)
+	{
+	case(1):
+		return 0;
+	}
 }
 
-double S2(int n_s)
+double S1(int n_s, double t)
 {
 	switch (n_s)
 	{
 	case(1):
-		return 2;
+		return 3 * t;
+	case(2):
+		return 53 * t;
+	case(3):
+		return 0;
+	case(4):
+		return 10 * t;
+	}
+}
+
+double S2(int n_s, double t)
+{
+	switch (n_s)
+	{
+	case(1):
+		return 50 * t + 30;
 	case(2):
 		return -PI * exp(1);
 	}
@@ -155,7 +197,7 @@ void InputData(vector<double>& timeMesh, vector<knot>& knots, vector<elem>& elem
 void CreatePortrait(slae &A, int timeSize)
 {
 	A.di.resize(N_knot);
-	A.ia.resize(N_knot);
+	A.ia.resize(N_knot + 1);
 	A.al.resize(N_knot - 1);
 	A.au.resize(N_knot - 1);
 	A.q.resize(timeSize);
@@ -167,65 +209,107 @@ void CreatePortrait(slae &A, int timeSize)
 
 	A.b.resize(N_knot);
 
-	for (int i = 0; i < N_knot - 1; i++)
+	for (int i = 0; i < N_knot; i++)
 	{
 		A.ia[i + 1] = i;
 	}
 }
 
-void CreateLocal_b(vector<vector<double>>& bloc, vector<elem>& elems)
-{
-	double h = 0., f1 = 0., f2 = 0.;
-	for (int i = 0; i < N_el; i++)
-	{
-		bloc[i].resize(2);
-
-		//f1 = Func(1, elems[i].knots[0]);
-		//f2 = Func(1, elems[i].knots[1]);
-
-		h = elems[i].knots[1].x - elems[i].knots[0].x;
-		bloc[i][0] = h / 6 * (2 * f1 + f2);
-		bloc[i][1] = h / 6 * (f1 + 2 * f2);
+void Mult(vector<int>& ia, vector<double>& al, vector<double>& au, vector<double>& di, vector<double>& vec, vector<double> &res) {
+	int dim = vec.size(), j = 0;
+	res.resize(dim);
+	for (int i = 0; i < dim; i++) {
+		res[i] = di[i] * vec[i];
+		j = i - ia[i + 1] + ia[i];
+		for (int k = ia[i]; k < ia[i + 1]; j++, k++) {
+			res[i] += al[k] * vec[j];
+			res[j] += au[k] * vec[i];
+		}
 	}
 }
 
-void Global_b(vector<double>& glob_b, vector<elem>& elems, vector<vector<double>>& bloc)
+void CreateGlobalM(matrix& MG, vector<elem>& elems, double &t, vector<double> &q)
 {
-	for (int k = 0; k < N_el; k++)
-		for (int iloc = 0; iloc < 2; iloc++)
-		{
-			int iglob = elems[k].vertex_glob[iloc];
-			glob_b[iglob] += bloc[k][iloc];
-		}
-}
-
-void CreateLocalA(slae& A, vector<elem>& elems, double deltaT)
-{
-	vector<vector<double>> G(2), M(2);
-	double h = 0., l1 = 0., l2 = 0., sigma1 = 0., sigma2 = 0.;
+	vector<vector<double>> M(2);
+	double h = 0., sigma1 = 0., sigma2 = 0;
 	for (int i = 0; i < 2; i++)
 	{
-		G[i].resize(2);
 		M[i].resize(2);
 	}
+	for (int i = 0; i < N_el; i++)
+	{
+		sigma1 = Sigma(1, elems[i].knots[0], q[elems[i].vertex_glob[0]], t);
+		sigma2 = Sigma(1, elems[i].knots[1], q[elems[i].vertex_glob[1]], t);
+
+		h = elems[i].knots[1].x - elems[i].knots[0].x;
+
+		M[0][0] = (3*sigma1 + sigma2) * h / 12;
+		M[1][1] = (sigma1 + 3 * sigma2) * h / 12;
+		M[0][1] = M[1][0] = (sigma1 + sigma2)/2 * h / 6;
+
+		MG.di[elems[i].vertex_glob[0]] += M[0][0];
+		MG.di[elems[i].vertex_glob[1]] += M[1][1];
+		MG.au[i] += M[0][1];
+		MG.al[i] += M[1][0];
+	}
+}
+
+void CreateGlobalG(matrix& GG, vector<elem>& elems, double& t) {
+	vector<vector<double>> G(2);
+	double h = 0., l1 = 0., l2 = 0.;
+
+	G[0].resize(2);
+	G[1].resize(2);
+
 	for (int i = 0; i < N_el; i++)
 	{
 		l1 = Lambda(1, elems[i].knots[0]);
 		l2 = Lambda(1, elems[i].knots[1]);
 
-		sigma1 = Sigma(1, elems[i].knots[0]);
-		sigma2 = Sigma(1, elems[i].knots[1]);
-
 		h = elems[i].knots[1].x - elems[i].knots[0].x;
 		G[0][0] = G[1][1] = (l1 + l2) / (2 * h);
 		G[0][1] = G[1][0] = -(l1 + l2) / (2 * h);
 
-		M[0][0] = M[1][1] = (1 / deltaT) * (sigma1 + sigma2) * h / 3;
-		M[0][1] = M[1][0] = (1 / deltaT) * (sigma1 + sigma2) * h / 6;
+		GG.di[elems[i].vertex_glob[0]] += G[0][0];
+		GG.di[elems[i].vertex_glob[1]] += G[1][1];
+		GG.au[i] += G[0][1];
+		GG.al[i] += G[1][0];
+	}
 
-		A.di[elems[i].vertex_glob[0]] += M[0][0] + G[0][0];
-		A.di[elems[i].vertex_glob[1]] += M[1][1] + G[1][1];
-		A.au[A.ia[elems[i].vertex_glob[]]]
+
+}
+
+void CreateGlobalB(vector<double> &bg, vector<elem>& elems, double& t) {
+	double h = 0., f1 = 0., f2 = 0.;
+	vector<double> b(2);
+
+	for (int i = 0; i < N_el; i++)
+	{
+		f1 = Func(3, elems[i].knots[0], t);
+		f2 = Func(3, elems[i].knots[1], t);
+
+		h = elems[i].knots[1].x - elems[i].knots[0].x;
+
+		b[0] = (h / 6) * (2 * f1 + f2);
+		b[1] = (h / 6) * (f1 + 2 * f2);
+
+		bg[elems[i].vertex_glob[0]] += b[0];
+		bg[elems[i].vertex_glob[1]] += b[1];
+	}
+}
+
+void CreateGlobalA(slae& A, matrix& M, matrix& G, vector<double>& b, vector<double> &q0, double &deltaT) {
+	vector<double> Mq(N_knot);
+	Mult(M.ia, M.al, M.au, M.di, q0, Mq);
+	
+	for (int i = 0; i < N_knot; i++) {
+		A.di[i] = M.di[i] / deltaT + G.di[i];
+		A.b[i] = b[i] + Mq[i] / deltaT;
+	}
+
+	for (int i = 0; i < N_knot - 1; i++) {
+		A.al[i] = M.al[i] / deltaT + G.al[i];
+		A.au[i] = M.au[i] / deltaT + G.au[i];
 	}
 }
 
@@ -233,108 +317,23 @@ void calcQ0(vector<double> &q0, vector<knot> &knots)
 {
 	for (int i = 0; i < N_knot; i++)
 	{
-		q0[i] = Func(1, knots[i], 0);
+		q0[i] = Q0(1, knots[i]);
 	}
 }
 
-void GlobalA(vector<vector<double>>& globA, vector<localA>& A, vector<elem>& elems)
+void GlobPlusCond1(slae& A, double &t)
 {
-
+	A.di[0] = 1;
+	A.au[0] = 0;
+	A.b[0] = S1(3, t);
+	A.di[N_knot - 1] = 1;
+	A.al[A.al.size() - 1] = 0;
+	A.b[N_knot - 1] = S1(4, t);
 }
 
-void GlobPlusCond1(vector<vector<double>>& globA, vector<double>& glob_b)
+void GlobPlusCond2(vector<double>& b, double &t)
 {
-	globA[0][0] = 1;
-	for (int j = 1; j < N_knot; j++)
-	{
-		globA[0][j] = 0;
-	}
-	glob_b[0] = S1(1);
-}
-
-void GlobPlusCond2(vector<double>& glob_b)
-{
-	glob_b[N_knot - 1] += S2(1);
-}
-
-void Solution(vector<double>& di, vector<double>& al, vector<double>& au, vector<double>& F, vector<double>& q)
-{
-	q.resize(N_knot);
-	double buf = 0.;
-	vector<double> alpha(N_knot - 1), beta(N_knot);
-	alpha[0] = -au[0] / di[0];
-	beta[0] = F[0] / di[0];
-
-	for (int i = 1; i < N_knot - 1; i++)
-	{
-		buf = di[i] + al[i - 1] * alpha[i - 1];
-		alpha[i] = -au[i] / buf;
-		beta[i] = (F[i] - al[i - 1] * beta[i - 1]) / buf;
-	}
-	q[N_knot - 1] = (F[N_knot - 1] - al[N_knot - 2] * beta[N_knot - 2]) / (di[N_knot - 1] + al[N_knot - 2] * alpha[N_knot - 2]);
-	for (int i = N_knot - 2; i >= 0; i--)
-	{
-		q[i] = alpha[i] * q[i + 1] + beta[i];
-	}
-}
-
-void Gauss(vector < vector < double>>& A, vector<double>& res, vector<double>& F)
-{
-	int n = res.size(), i = 0;
-	double max = 0, buf = 0;
-
-	for (int k = 0; k < n; k++)
-	{
-		max = abs(A[k][k]);
-		i = k;
-		for (int m = k + 1; m < n; m++)
-		{
-			buf = A[m][k];
-			if (abs(buf) > max)
-			{
-				i = m;
-				max = abs(buf);
-			}
-		}
-
-		if (max == 0)
-			cout << "System havent solution" << endl;
-
-		if (i != k)
-		{
-			A[i].swap(A[k]);
-			buf = F[i];
-			F[i] = F[k];
-			F[k] = buf;
-		}
-
-		max = A[k][k];
-		A[k][k] = 1;
-
-		for (int j = k + 1; j < n; j++)
-			A[k][j] /= max;
-
-		F[k] /= max;
-
-		for (i = k + 1; i < n; i++)
-		{
-			buf = A[i][k];
-			A[i][k] = 0;
-			if (buf != 0)
-			{
-				for (int j = k + 1; j < n; j++)
-					A[i][j] -= buf * A[k][j];
-				F[i] -= buf * F[k];
-			}
-		}
-	}
-	for (i = n - 1; i >= 0; i--)
-	{
-		buf = 0;
-		for (int j = n - 1; j > i; j--)
-			buf += A[i][j] * res[j];
-		res[i] = F[i] - buf;
-	}
+	b[N_knot - 1] += S2(1, t);
 }
 
 double Norm(vector<double> x)
@@ -346,6 +345,85 @@ double Norm(vector<double> x)
 	return sqrt(res);
 }
 
+void LUwithStar(vector<int>& ia, vector<double>& al, vector<double>& au, vector<double>& di) {
+	int dim = di.size(), j = 0, ik0 = 0, i_st = 0, j_st = 0, jk0 = 0;
+	double sumL = 0., sumU = 0., sumDi = 0.;
+	for (int i = 0; i < dim; i++) {
+		sumDi = 0.;
+		j = i - (ia[i + 1] - ia[i]);
+		i_st = j;
+			for (int k = ia[i]; k < ia[i + 1]; k++, j++) {
+				sumL = 0.;
+				sumU = 0.;
+				j_st = j - (ia[j + 1] - ia[j]);
+				if (i_st > j_st) {
+					ik0 = ia[i];
+					jk0 = ia[j] + (i_st - j_st);
+				}
+				else {
+					ik0 = ia[i] + (j_st - i_st);
+					jk0 = ia[j];
+				}
+				for (int ik = ik0; ik < k; ik++, jk0++) {
+					sumL += al[ik] * au[jk0];
+					sumU += au[ik] * al[jk0];
+				}
+				al[k] = (al[k] - sumL) / di[j];
+				au[k] -= sumU;
+				sumDi += al[k] * au[k];
+			}
+		di[i] -= sumDi;
+	}
+}
+
+void ForwardMotion(vector<int>& ia, vector<double>& al, vector<double>& vec) {
+	int dim = vec.size(), j = 0, i0 = 0, i1 = 0;
+	double sum = 0.;
+	for (int i = 1; i < dim; i++) {
+		sum = 0.;
+		i0 = ia[i];
+		i1 = ia[i + 1];
+		j = i - (i1 - i0);
+		for (int k = i0; k < i1; k++, j++) {
+			sum += al[k] * vec[j];
+		}
+		vec[i] = vec[i] - sum;
+	}
+}
+void ReverseMotion(vector<int>& ia, vector<double>& au, vector<double>& di, vector<double>& vec) {
+	int dim = vec.size(), j = 0;
+	double xi = 0;
+	for (int i = dim - 1; i >= 0; i--) {
+		xi = vec[i] / di[i];
+		j = i - 1;
+		for (int k = ia[i + 1] - 1; k >= ia[i]; k--, j--) {
+			vec[j] -= au[k] * xi;
+		}
+		vec[i] = xi;
+	}
+}
+
+double CalcResidual(slae& A, vector<double> &q, vector<double> &b)
+{
+	vector<double> v(q.size());
+	Mult(A.ia, A.al, A.au, A.di, q, v);
+
+	for (int i = 0; i < v.size(); i++)
+	{
+		v[i] -= b[i];
+	}
+
+	return Norm(v) / Norm(b);
+}
+
+double CalcChange(vector<double>& q_prev, const vector<double>& q)
+{
+	for (int i = 0; i < q.size(); i++)
+		q_prev[i] = q[i] - q_prev[i];
+
+	return Norm(q_prev) / Norm(q);
+}
+
 int main()
 {
 	vector<double> timeMesh;
@@ -355,50 +433,76 @@ int main()
 	InputData(timeMesh, knots, elems);
 
 	slae A;
+	matrix M, G;
+	vector<double> b(N_knot), b_q0(N_knot), q_prev(N_knot);
+	
 	CreatePortrait(A, timeMesh.size());
 
-	//vector<localA> Aloc(N_el);
-	//vector<vector<double>> bloc(N_el);
-
 	calcQ0(A.q[0], knots);
-	return 0;
-	//for (int i = 1; i < timeMesh.size(); i++)
-	//{
 
-	//}
+	cout << "q" << 0 << "C" << ":\t";
+	for (int i = 0; i < A.q[0].size(); i++)
+	{
+		cout << A.q[0][i] << "\t";
+	}
+	cout << endl;
+	cout << "q" << 0 << "A" << ":\t";
+	for (int i = 0; i < A.q[0].size(); i++)
+	{
+		cout << 0 << "\t";
+	}
+	cout << endl;
 
-	//CreateLocal_b(bloc, elems);
-	//CreateLocalA(Aloc, elems);
+	double deltaT = 0., t = 0., resid = EPSILON + 1, changeQ = DELTA + 1;
+	for (int i = 1; i < timeMesh.size(); i++)
+	{
+		t = timeMesh[i];
+		//q_prev[0] = 0;
+		//q_prev[1] = 5 * t;
+		//q_prev[2] = 10 * t;
+		deltaT = t - timeMesh[i - 1];
+		CreateGlobalM(M, elems, t, q_prev);
+		CreateGlobalG(G, elems, t);
+		CreateGlobalB(b, elems, t);
+		CreateGlobalA(A, M, G, b, A.q[i - 1], deltaT);
+		GlobPlusCond1(A, t);
+		/*b_q0 = A.b;
+		resid = CalcResidual(A, q_prev, b_q0);
 
+		for (int iter = 1; iter < 1000 && resid > EPSILON && changeQ > DELTA; iter++)*/
+		//{
+			LUwithStar(A.ia, A.al, A.au, A.di);
+			ForwardMotion(A.ia, A.al, A.b);
+			ReverseMotion(A.ia, A.au, A.di, A.b);
+		//	
+		//	changeQ = CalcChange(q_prev, A.b);
+		//	q_prev = A.b;
 
+		//	CreateGlobalM(M, elems, t, q_prev);
+		//	CreateGlobalA(A, M, G, b, A.q[i - 1], deltaT);
+		//	GlobPlusCond1(A, t);
 
-	//Gauss(globA, q, glob_b);
+		//	resid = CalcResidual(A, q_prev, b_q0);
 
-	//FILE* out;
-	//fopen_s(&out, "out.txt", "w");
-	//fprintf_s(out, "%7s", "x");
-	//fprintf_s(out, "%2s", " |");
-	//fprintf_s(out, "%15s", "Yn*");
-	//fprintf_s(out, "%20s", "Yn\n");
-	//for (int i = 0; i < 55; i++)
-	//	fprintf_s(out, "%1s", "-");
-	//fprintf_s(out, "%s", "\n");
+		//	cout << iter << "\t\t" << "Residual: " << resid << "\t\t" << "changeQ: " << changeQ << endl;
+		//}
+		//cout << endl;
 
-	//vector<double> buf(N_knot);
-	//for (int i = 0; i < N_knot; i++)
-	//{
-	//	buf[i] = sin(knots[i].x*PI);
-	//	fprintf_s(out, "%7f", knots[i].x);
-	//	fprintf_s(out, "%2s", " |");
-	//	fprintf_s(out, "%.14e ", buf[i]);
-	//	fprintf_s(out, " %.14e ", q[i]);
-	//	buf[i] -= q[i];
-	//	fprintf_s(out, "%s", "\n");
-	//}
-	//fprintf_s(out, "%s", "\n");
-	//fprintf_s(out, "%5s", "||Yn*-Yn|| = ");
-	//fprintf_s(out, "%.14e ", Norm(buf));
-	//fclose(out);
+		A.q[i] = A.b;
+		cout << "q" << i << "C" << ":\t";
+		for (int j = 0; j < A.q[0].size(); j++)
+		{
+			cout << A.q[i][j] << "\t";
+		}
+		cout << endl;
+		cout << "q" << i << "A" << ":\t";
+		for (int j = 0; j < A.q[0].size(); j++)
+		{
+			//cout << 5*knots[j].x*t + 3*t << "\t";
+			cout << knots[j].x * t << "\t";
+		}
+		cout << "\n\n\n";
+	}
 
 	return 0;
 }
