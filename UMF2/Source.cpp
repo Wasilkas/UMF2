@@ -66,8 +66,7 @@ double Sigma(int n_lambda, knot& kn, double q, double t)
 	switch (n_lambda)
 	{
 	case(1):
-		return 1;
-
+		return q + 1;
 	}
 }
 
@@ -76,9 +75,18 @@ double Func(int n_f, knot& kn, double &q, double& t)
 	switch (n_f)
 	{
 	case(1):
-		return 2 * t;
+		return kn.x * (kn.x * t + 1);
 	case(2):
 		return Sigma(1, kn, q, t) * kn.x;
+	}
+}
+
+double DSigma(int n_sigma, knot& kn, double q, double t)
+{
+	switch (n_sigma)
+	{
+	case(1):
+		return 1;
 	}
 }
 
@@ -96,7 +104,68 @@ double S1(int n_s, knot &kn, double t)
 	switch (n_s)
 	{
 	case(1):
-		return t * t;
+		return kn.x * t;
+	}
+}
+
+void calcDifferentials(vector<vector<vector<double>>>& diffA, double h, vector<double> q, elem& el, double t)
+{
+	diffA[0][0][0] = DSigma(sigmaNum, el.knots[0], q[el.vertex_glob[0]], t) * h / 4;
+	diffA[0][0][1] = DSigma(sigmaNum, el.knots[0], q[el.vertex_glob[0]], t) * h / 12;
+	diffA[0][1][0] = DSigma(sigmaNum, el.knots[0], q[el.vertex_glob[0]], t) * h / 12;
+	diffA[0][1][1] = DSigma(sigmaNum, el.knots[0], q[el.vertex_glob[0]], t) * h / 12;
+	diffA[1][0][0] = DSigma(sigmaNum, el.knots[1], q[el.vertex_glob[1]], t) * h / 12;
+	diffA[1][0][1] = DSigma(sigmaNum, el.knots[1], q[el.vertex_glob[1]], t) * h / 12;
+	diffA[1][1][0] = DSigma(sigmaNum, el.knots[1], q[el.vertex_glob[1]], t) * h / 12;
+	diffA[1][1][1] = DSigma(sigmaNum, el.knots[1], q[el.vertex_glob[1]], t) * h / 4;
+}
+
+void AddNewtonAdditions(vector<elem>& elems, vector<double> q0, slae& A, double t)
+{
+	vector<vector<double>> G(2);
+	vector<vector<vector<double>>> diffA(2);
+	vector<double> b(2);
+	double h = 0.;
+
+	for (int i = 0; i < 2; i++)
+	{
+		diffA[i].resize(2);
+		for (int j = 0; j < 2; j++)
+		{
+			diffA[i][j].resize(2);
+		}
+	}
+
+	for (int i = 0; i < elems.size(); i++)
+	{
+		b.assign(2, 0);
+		for (int j = 0; j < 2; j++)
+			G[j].assign(2, 0);
+
+		h = elems[i].knots[1].x - elems[i].knots[0].x;
+		calcDifferentials(diffA, h, q0, elems[i], t);
+
+		for (int j = 0; j < 2; j++)
+		{
+			G[0][0] += diffA[0][0][j] * q0[elems[i].vertex_glob[j]];
+			G[0][1] += diffA[1][0][j] * q0[elems[i].vertex_glob[j]];
+			G[1][0] += diffA[0][1][j] * q0[elems[i].vertex_glob[j]];
+			G[1][1] += diffA[1][1][j] * q0[elems[i].vertex_glob[j]];
+
+			for (int r = 0; r < 2; r++)
+			{
+				b[0] += q0[elems[i].vertex_glob[j]] * diffA[r][0][j] * q0[elems[i].vertex_glob[r]];
+				b[1] += q0[elems[i].vertex_glob[j]] * diffA[r][1][j] * q0[elems[i].vertex_glob[r]];
+			}
+		}
+
+		A.di[elems[i].vertex_glob[0]] += G[0][0];
+		A.di[elems[i].vertex_glob[1]] += G[1][1];
+		A.au[i] += G[0][1];
+		A.al[i] += G[1][0];
+
+		A.b[elems[i].vertex_glob[0]] += b[0];
+		A.b[elems[i].vertex_glob[1]] += b[1];
 	}
 }
 
@@ -125,14 +194,28 @@ void GetMesh(double& a, double& b)
 	for (int i = 0; i <= N_el; i++)
 	{
 		p = a + h * i;
-		x << p << endl;
-		elems << i + 1 << " " << i + 2 << endl;
+		if (i == N_el)
+		{
+			x << p;
+		}
+		else
+		{
+			x << p << endl;
+		}
 	}
 
 	for (int i = 0; i < N_el; i++)
-	{
-		elems << i + 1 << " " << i + 2 << endl;
+	{	
+		if (i == N_el - 1)
+		{
+			elems << i + 1 << " " << i + 2;
+		}
+		else
+		{
+			elems << i + 1 << " " << i + 2 << endl;
+		}
 	}
+
 
 	x.close();
 	elems.close();
@@ -231,7 +314,7 @@ void CreateGlobalM(matrix& MG, vector<elem>& elems, double &t, vector<double> &q
 
 		M[0][0] = (3*sigma1 + sigma2) * h / 12;
 		M[1][1] = (sigma1 + 3 * sigma2) * h / 12;
-		M[0][1] = M[1][0] = (sigma1 + sigma2)/2 * h / 6;
+		M[0][1] = M[1][0] = (sigma1 + sigma2) * h / 12;
 
 		MG.di[elems[i].vertex_glob[0]] += M[0][0];
 		MG.di[elems[i].vertex_glob[1]] += M[1][1];
@@ -423,7 +506,7 @@ int main()
 
 	calcQ0(A.q[0], knots);
 
-	q_prev.assign(q_prev.size(), 1);
+	q_prev.assign(q_prev.size(), 5);
 
 	for (int j = 0; j < 70; j++)
 	{
@@ -450,8 +533,10 @@ int main()
 		resid = CalcResidual(A, q_prev, A.b);
 		solve = q_prev;
 
-		for (int iter = 1; iter < 1000 && resid > EPSILON; iter++)
+		for (int iter = 1; iter < 2000 && resid > EPSILON; iter++)
 		{
+			AddNewtonAdditions(elems, q_prev, A, t);
+			GlobPlusCond1(A, knots, t);
 			LUwithStar(A.ia, A.al, A.au, A.di);
 			ForwardMotion(A.ia, A.al, A.b);
 			ReverseMotion(A.ia, A.au, A.di, A.b);
