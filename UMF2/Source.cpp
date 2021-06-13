@@ -122,7 +122,7 @@ void calcDifferentials(vector<vector<vector<double>>>& diffA, double h, vector<d
 
 void AddNewtonAdditions(vector<elem>& elems, vector<double> q0, slae& A, double t)
 {
-	vector<vector<double>> G(2);
+	vector<vector<double>> M(2);
 	vector<vector<vector<double>>> diffA(2);
 	vector<double> b(2);
 	double h = 0.;
@@ -140,17 +140,17 @@ void AddNewtonAdditions(vector<elem>& elems, vector<double> q0, slae& A, double 
 	{
 		b.assign(2, 0);
 		for (int j = 0; j < 2; j++)
-			G[j].assign(2, 0);
+			M[j].assign(2, 0);
 
 		h = elems[i].knots[1].x - elems[i].knots[0].x;
 		calcDifferentials(diffA, h, q0, elems[i], t);
 
 		for (int j = 0; j < 2; j++)
 		{
-			G[0][0] += diffA[0][0][j] * q0[elems[i].vertex_glob[j]];
-			G[0][1] += diffA[1][0][j] * q0[elems[i].vertex_glob[j]];
-			G[1][0] += diffA[0][1][j] * q0[elems[i].vertex_glob[j]];
-			G[1][1] += diffA[1][1][j] * q0[elems[i].vertex_glob[j]];
+			M[0][0] += diffA[0][0][j] * q0[elems[i].vertex_glob[j]];
+			M[0][1] += diffA[1][0][j] * q0[elems[i].vertex_glob[j]];
+			M[1][0] += diffA[0][1][j] * q0[elems[i].vertex_glob[j]];
+			M[1][1] += diffA[1][1][j] * q0[elems[i].vertex_glob[j]];
 
 			for (int r = 0; r < 2; r++)
 			{
@@ -159,13 +159,13 @@ void AddNewtonAdditions(vector<elem>& elems, vector<double> q0, slae& A, double 
 			}
 		}
 
-		A.di[elems[i].vertex_glob[0]] += G[0][0];
-		A.di[elems[i].vertex_glob[1]] += G[1][1];
-		A.au[i] += G[0][1];
-		A.al[i] += G[1][0];
+		A.di[i] += M[0][0];
+		A.di[i + 1] += M[1][1];
+		A.au[i] += M[0][1];
+		A.al[i] += M[1][0];
 
-		A.b[elems[i].vertex_glob[0]] += b[0];
-		A.b[elems[i].vertex_glob[1]] += b[1];
+		A.b[i] += b[0];
+		A.b[i+1] += b[1];
 	}
 }
 
@@ -506,7 +506,7 @@ int main()
 
 	calcQ0(A.q[0], knots);
 
-	q_prev.assign(q_prev.size(), 5);
+	q_prev.assign(q_prev.size(), 1);
 
 	for (int j = 0; j < 70; j++)
 	{
@@ -518,6 +518,7 @@ int main()
 	for (int i = 1; i < timeMesh.size(); i++)
 	{
 		t = timeMesh[i];
+		//q_prev.assign(q_prev.size(), 100);
 		deltaT = t - timeMesh[i - 1];
 
 		M.al.assign(N_knot - 1, 0);
@@ -532,11 +533,13 @@ int main()
 
 		resid = CalcResidual(A, q_prev, A.b);
 		solve = q_prev;
+		iters = 0;
 
-		for (int iter = 1; iter < 2000 && resid > EPSILON; iter++)
+		for (int iter = 1; iter < 10000 && resid > EPSILON; iter++)
 		{
 			AddNewtonAdditions(elems, q_prev, A, t);
 			GlobPlusCond1(A, knots, t);
+
 			LUwithStar(A.ia, A.al, A.au, A.di);
 			ForwardMotion(A.ia, A.al, A.b);
 			ReverseMotion(A.ia, A.au, A.di, A.b);
@@ -576,13 +579,21 @@ int main()
 		out << "x\t\t\t\t" << "calc" << "\t\t\t" << "prec" << "\t\t\t" << "dif" << "\t\t\t\t" << "N" << endl;
 		for (int j = 0; j < A.q[0].size(); j++)
 		{
-			if (j % 1 == 0)
+			if (j % 4 == 0)
 			{
 				double calc = A.q[i][j], analitic = S1(funcNum, knots[j], t);
 				out << scientific << knots[j].x << "\t" << scientific << calc << "\t" << scientific << analitic << "\t" << scientific << abs(calc - analitic) << "\t" << j + 1 << endl;
 				norm += abs(calc - analitic) * abs(calc - analitic);
 			}
 		}
+
+		//knot k;
+		//k.x = 1.25;
+		//double psi1 = (elems[1].knots[1].x - k.x)/1, psi2 = (k.x - elems[1].knots[0].x)/ 1;
+		//double point = psi1 * A.q[i][1] + psi2 * A.q[i][2];
+
+		//out << scientific << k.x << "\t" << scientific << point << "\t" << scientific << S1(funcNum, k, t) << "\t" << scientific << abs(point - S1(funcNum, k, t)) << "\t" << "point" << endl;
+		//norm += abs(point - S1(funcNum, k, t)) * abs(point - S1(funcNum, k, t));
 
 		out << "||q-q*|| :" << sqrt(norm) << endl;
 
